@@ -17,20 +17,68 @@ const imgOf = s => (s.image && (s.image.startsWith('http') || s.image.startsWith
 
 init();
 
+let REGIONS, currentCity, currentDistrict;
+
 async function init() {
   try {
-    SPOTS = await fetch('/spots.json').then(r => r.json());
+    REGIONS = await fetch('/data/regions.json').then(r => r.json());
     const m = await RouteModel.loadModel();
     console.log(`[AI] 모델 로드 완료 — 구조 ${m.layers.map(L => L.inN + '→' + L.outN).join(', ')}, 학습 ${m.samples}샘플, 검증손실 ${m.finalValLoss}`);
   } catch (e) {
-    SPOTS = SPOTS || [];
+    REGIONS = { cities: [] };
   }
   renderCategoryTabs();
-  renderSpots('전체');
   renderBuilderOptions();
   bindBuilder();
   bindDetailModal();
+  setupRegions();
   $('#spotMore').addEventListener('click', () => { spotExpanded = !spotExpanded; drawSpots(); });
+
+  if (REGIONS.cities.length) {
+    currentCity = REGIONS.cities[0];
+    await changeCity(currentCity.name);
+  }
+}
+
+/* ---------- 지역 계층 (시/도 → 구) ---------- */
+function fillSelect(sel, items, val) {
+  if (!sel) return;
+  sel.innerHTML = items.map(i => `<option value="${i}">${i}</option>`).join('');
+  if (val) sel.value = val;
+}
+
+function setupRegions() {
+  fillSelect($('#opCity'), REGIONS.cities.map(c => c.name), REGIONS.cities[0] && REGIONS.cities[0].name);
+  $('#opCity').addEventListener('change', () => changeCity($('#opCity').value));
+  $('#opDistrict').addEventListener('change', () => changeDistrict($('#opDistrict').value));
+  $('#opRegion').addEventListener('change', () => changeDistrict($('#opRegion').value));
+}
+
+async function changeCity(cityName) {
+  currentCity = REGIONS.cities.find(c => c.name === cityName) || REGIONS.cities[0];
+  if ($('#opCity')) $('#opCity').value = currentCity.name;
+  if ($('#cityLabel')) $('#cityLabel').textContent = currentCity.name;
+  const names = currentCity.districts.map(d => d.name);
+  fillSelect($('#opDistrict'), names);
+  fillSelect($('#opRegion'), names);
+  await changeDistrict(names[0]);
+}
+
+async function changeDistrict(name) {
+  currentDistrict = name;
+  if ($('#opDistrict')) $('#opDistrict').value = name;
+  if ($('#opRegion')) $('#opRegion').value = name;
+  try {
+    SPOTS = await fetch(`/data/${currentCity.code}/${encodeURIComponent(name)}.json`).then(r => r.json());
+  } catch (e) { SPOTS = []; }
+  spotExpanded = false;
+  drawSpots();
+  const sub = $('#exploreSub');
+  if (sub) sub.textContent = `${currentCity.name} ${name}의 관광정보(${SPOTS.length}곳)를 테마별로 선별했습니다.`;
+  // 지역이 바뀌면 이전 루트 결과는 숨김
+  $('#builderResult').classList.add('hidden');
+  document.querySelector('.builder').classList.remove('has-result');
+  $('#simulation').classList.add('hidden');
 }
 
 /* ---------- 테마별 큐레이션 ---------- */
@@ -217,7 +265,7 @@ function bindBuilder() {
 /* ---------- 지도 ---------- */
 function ensureMap() {
   if (map) return;
-  map = L.map('map', { scrollWheelZoom: false }).setView([37.6027, 126.9292], 13);
+  map = L.map('map', { scrollWheelZoom: false }).setView([37.5665, 126.978], 11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap', maxZoom: 18
   }).addTo(map);
@@ -257,7 +305,8 @@ function drawDay(day, di) {
 function renderSimulation(result, opts) {
   const sim = $('#simulation');
   sim.classList.remove('hidden');
-  $('#simTitle').textContent = `${opts.region} ${dayLabel(opts.days)} 추천 코스 (총 ${result.total}곳)`;
+  const cityShort = currentCity ? currentCity.name.replace(/특별시|광역시|특별자치시|특별자치도|도$/, '') : '';
+  $('#simTitle').textContent = `${cityShort} ${opts.region} ${dayLabel(opts.days)} 추천 코스 (총 ${result.total}곳)`;
 
   const tabs = $('#dayTabs');
   tabs.innerHTML = result.days.map((d, i) =>

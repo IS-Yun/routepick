@@ -56,7 +56,11 @@
   <section class="section alt" id="explore">
     <div class="inner">
       <h2 class="sec-title">테마별 콘텐츠 큐레이션</h2>
-      <p class="sec-sub">한국관광콘텐츠랩의 관광정보를 테마별로 선별해 담았습니다.</p>
+      <p class="sec-sub" id="exploreSub">한국관광콘텐츠랩의 관광정보를 테마별로 선별해 담았습니다.</p>
+      <div class="region-bar">
+        <select id="opCity" class="region-sel"></select>
+        <select id="opDistrict" class="region-sel"></select>
+      </div>
       <div class="tabs" id="catTabs"></div>
       <div class="card-grid" id="spotGrid"></div>
       <div class="more-wrap"><button id="spotMore" class="btn-more"></button></div>
@@ -72,9 +76,9 @@
       <div class="builder">
         <form class="builder-form" id="builderForm">
           <div class="bf">
-            <label>여행 지역</label>
-            <select id="opRegion"><option value="은평구">서울 은평구</option></select>
-            <small style="display:block;color:#9aa6b5;font-size:12px;margin-top:6px;">현재 은평구 지역 제공 · 전국 확장 예정</small>
+            <label>여행 지역 <small id="cityLabel" style="color:#9aa6b5;font-weight:400;"></small></label>
+            <select id="opRegion"></select>
+            <small style="display:block;color:#9aa6b5;font-size:12px;margin-top:6px;">서울 25개 구 제공 · 전국 확대 예정</small>
           </div>
           <div class="bf">
             <label>여행 테마 <small>(복수 선택)</small></label>
