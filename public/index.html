@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>루트픽 AI — 한국관광 콘텐츠 기반 AI 맞춤 여행 루트</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a7de1'/%3E%3Ctext x='16' y='23' font-size='20' font-weight='700' fill='white' text-anchor='middle' font-family='sans-serif'%3ER%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="inner">
+    <a class="brand" href="#top">
+      <span class="brand-mark">R</span>
+      <span class="brand-name">루트픽 <i>RoutePick AI</i></span>
+    </a>
+    <nav>
+      <a href="#about">서비스 소개</a>
+      <a href="#explore">관광지 둘러보기</a>
+      <a href="#builder">추천 루트</a>
+    </nav>
+    <a href="#builder" class="nav-cta">루트 만들기</a>
+  </div>
+</header>
+
+<!-- 히어로 -->
+<section class="hero" id="top">
+  <div class="inner hero-grid">
+    <div class="hero-text">
+      <h1>AI가 설계하는<br>나만의 은평구 여행 루트</h1>
+      <p>한국관광 콘텐츠랩 데이터를 기반으로 위치·취향·일정에 맞춘 코스를 추천합니다.<br>
+         현재 서울 은평구 한정이며 전국으로 확대 예정입니다.</p>
+      <a href="#builder" class="btn-primary">AI 맞춤 루트 추천받기</a>
+    </div>
+  </div>
+</section>
+
+<main>
+
+  <!-- 서비스 소개 -->
+  <section class="section" id="about">
+    <div class="inner">
+      <h2 class="sec-title">루트픽 AI는</h2>
+      <p class="sec-sub">한국관광 콘텐츠 기반 AI 맞춤 여행 루트 플랫폼</p>
+      <div class="feature-cards">
+        <div class="fcard"><div class="ficon">①</div><h3>위치 기반 관광지 탐색</h3><p>콘텐츠랩 관광정보를 지역·테마별로 큐레이션해 보여줍니다.</p></div>
+        <div class="fcard"><div class="ficon">②</div><h3>AI 최적 루트 자동 설계</h3><p>선택한 조건에 맞춰 동선을 계산하고 일자별 코스를 짭니다.</p></div>
+        <div class="fcard"><div class="ficon">③</div><h3>루트 시뮬레이션 &amp; 공유</h3><p>시간표와 지도로 코스를 미리 보고 다른 여행자와 공유합니다.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 테마별 콘텐츠 큐레이션 -->
+  <section class="section alt" id="explore">
+    <div class="inner">
+      <h2 class="sec-title">테마별 콘텐츠 큐레이션</h2>
+      <p class="sec-sub">한국관광콘텐츠랩의 관광정보를 테마별로 선별해 담았습니다.</p>
+      <div class="tabs" id="catTabs"></div>
+      <div class="card-grid" id="spotGrid"></div>
+      <div class="more-wrap"><button id="spotMore" class="btn-more"></button></div>
+    </div>
+  </section>
+
+  <!-- 추천 루트 빌더 -->
+  <section class="section" id="builder">
+    <div class="inner">
+      <h2 class="sec-title">추천 여행 루트</h2>
+      <p class="sec-sub">지역과 테마, 일정을 선택하면 AI가 동선을 설계해 드립니다.</p>
+
+      <div class="builder">
+        <form class="builder-form" id="builderForm">
+          <div class="bf">
+            <label>여행 지역</label>
+            <select id="opRegion"><option value="은평구">서울 은평구</option></select>
+            <small style="display:block;color:#9aa6b5;font-size:12px;margin-top:6px;">현재 은평구 지역 제공 · 전국 확장 예정</small>
+          </div>
+          <div class="bf">
+            <label>여행 테마 <small>(복수 선택)</small></label>
+            <div class="chips" id="opCats"></div>
+          </div>
+          <div class="bf">
+            <label>여행 일정</label>
+            <select id="opDays">
+              <option value="1">당일</option>
+              <option value="2" selected>1박 2일</option>
+              <option value="3">2박 3일</option>
+            </select>
+          </div>
+          <div class="bf">
+            <label>여행 스타일</label>
+            <select id="opStyle">
+              <option>느긋하게</option>
+              <option selected>보통</option>
+              <option>알차게</option>
+            </select>
+          </div>
+          <button type="submit" class="btn-primary full">AI 루트 생성하기</button>
+        </form>
+
+        <div class="builder-result hidden" id="builderResult">
+          <div id="map" class="map"></div>
+          <div id="routeMsg" class="route-msg hidden">선택한 조건에 맞는 관광정보가 부족합니다.</div>
+          <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>AI가 동선을 설계하고 있어요…</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 루트 시뮬레이션 (일자별 타임라인) -->
+      <div id="simulation" class="simulation hidden">
+        <div class="sim-head">
+          <h3 id="simTitle">루트 시뮬레이션</h3>
+          <button id="regenBtn" class="btn-ghost">다른 코스 추천 ↻</button>
+        </div>
+        <div id="dayTabs" class="day-tabs"></div>
+        <div id="timeline" class="timeline"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="inner">
+    <p>루트픽 AI · 한국관광콘텐츠랩 콘텐츠 활용 사례</p>
+    <p class="src">출처: 한국관광공사 한국관광콘텐츠랩 관광정보 (Korea Tourism Organization)</p>
+  </div>
+</footer>
+
+<!-- 관광지 상세 모달 -->
+<div class="modal hidden" id="detailModal">
+  <div class="modal-box detail-box">
+    <button class="modal-x" id="dtClose" aria-label="닫기">×</button>
+    <img id="dtImg" class="dt-img" alt="">
+    <div class="dt-body">
+      <span class="card-cat" id="dtCat"></span>
+      <h3 id="dtName"></h3>
+      <div class="dt-region" id="dtRegion"></div>
+      <ul class="dt-meta" id="dtMeta"></ul>
+      <p class="dt-desc" id="dtDesc"></p>
+      <div class="dt-links" id="dtLinks"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/js/nn.js"></script>
+<script src="/js/features.js"></script>
+<script src="/js/model.js"></script>
+<script src="/js/route.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
