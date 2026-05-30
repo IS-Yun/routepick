@@ -1,24 +1,16 @@
-// 콘텐츠랩 지역별 데이터(lab_data: {구}.xlsx + {구}_image)를 계층 구조로 빌드한다.
-//   node scripts/build-data.js [labDir]
-// 출력:
-//   public/data/regions.json        지역 트리(시/도 → 구)
-//   public/data/seoul/{구}.json      구별 관광지
-//   public/images/seoul/{구}/...     구별 이미지(매칭 복사)
-// 전국 확장: lab_data에 다른 시/도 폴더를 추가하고 CITY 목록만 늘리면 된다.
-
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
+const { popOf } = require('./popularity.js');
 
 const ROOT = path.join(__dirname, '..');
 const LAB = process.argv[2] || path.join(ROOT, '..', 'lab_data');
 
-// 현재는 서울 한 시/도. 전국 확장 시 여기에 {name, code, dir} 추가.
 const CITIES = [{ name: '서울특별시', code: 'seoul', dir: LAB }];
 
-const SHEET_CAT = { '문화시설': '문화/역사', '쇼핑': '맛집/쇼핑', '음식점': '맛집/쇼핑', '숙박': null };
-const STAY = { '자연/생태': 120, '문화/역사': 90, '도시/체험': 60, '맛집/쇼핑': 45 };
+const SHEET_CAT = { '문화시설': '문화/역사', '쇼핑': '쇼핑', '음식점': '맛집', '숙박': null };
+const STAY = { '자연/생태': 120, '문화/역사': 90, '도시/체험': 60, '맛집': 75, '쇼핑': 45 };
 
 function inferTourist(name, desc) {
   const n = (name || '').replace(/\([^)]*\)/g, '').trim();
@@ -27,7 +19,8 @@ function inferTourist(name, desc) {
       /사찰|한옥|유적|문화재|박물관|미술관|도서관|기념관|역사관|향교|서원|성당|성지|전통문화|국악|한복/.test(t)) return '문화/역사';
   if (/산|둘레길|공원|계곡|숲|하천|호수|생태|폭포|약수|벚꽃|단풍|꽃축제|나들이|정원|천$/.test(n) ||
       /북한산|둘레길|계곡|생태공원|숲길|산책로|벚꽃|단풍/.test(desc)) return '자연/생태';
-  if (/음식|맛집|먹거리|미식|푸드|시장축제|플리마켓/.test(n)) return '맛집/쇼핑';
+  if (/음식|맛집|먹거리|미식|푸드/.test(n)) return '맛집';
+  if (/시장축제|플리마켓|쇼핑/.test(n)) return '쇼핑';
   return '도시/체험';
 }
 
@@ -78,7 +71,6 @@ function extract(xlsx) {
   return tmp;
 }
 
-// 워크북에서 시트명 → 실제 파일 경로 (구마다 시트 구성/순서가 달라 동적으로 읽음)
 function sheetMap(dir) {
   const wb = fs.readFileSync(path.join(dir, 'xl', 'workbook.xml'), 'utf8');
   const rels = fs.readFileSync(path.join(dir, 'xl', '_rels', 'workbook.xml.rels'), 'utf8');
@@ -96,7 +88,6 @@ function sheetMap(dir) {
   return out;
 }
 
-// {구}_image 폴더에서 명칭 → 대표 이미지
 function imageIndex(imgDir) {
   if (!fs.existsSync(imgDir)) return null;
   const norm = s => s.replace(/[\s\[\]()·\-_]/g, '').toLowerCase();
@@ -120,14 +111,14 @@ function buildDistrict(cityDir, district, cityName) {
   let spots = [];
   let i = 0;
   for (const sh of sheets) {
-    if (SHEET_CAT[sh.name] === null) continue;            // 숙박 제외
+    if (SHEET_CAT[sh.name] === null) continue;
     const rows = parseSheet(fs.readFileSync(sh.file, 'utf8'));
     for (const r of rows) {
       const name = r['명칭'] || r[findKey(r, /^명칭|^제목|^명소명/)];
       const lat = parseFloat(r[findKey(r, /위도/)]);
       const lng = parseFloat(r[findKey(r, /경도/)]);
       if (!name || !isFinite(lat) || !isFinite(lng)) continue;
-      if (lat < 33 || lat > 39 || lng < 124 || lng > 132) continue;  // 한국 범위 밖 제외
+      if (lat < 33 || lat > 39 || lng < 124 || lng > 132) continue;
 
       const fullDesc = (r[findKey(r, /개요/)] || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
       const category = SHEET_CAT[sh.name] != null ? SHEET_CAT[sh.name] : inferTourist(name, fullDesc);
@@ -155,14 +146,13 @@ function buildDistrict(cityDir, district, cityName) {
   }
   fs.rmSync(dir, { recursive: true, force: true });
 
-  // 같은 몰/백화점 매장 합치기
   const groups = new Map();
   const collapsed = [];
   for (const s of spots) {
     const key = venueKey(s.name);
     if (!key) { collapsed.push(s); continue; }
     if (!groups.has(key)) {
-      const rep = { ...s, name: key, category: '맛집/쇼핑', stay: 90, desc: `${key}에 다양한 브랜드 매장이 입점한 복합 쇼핑 공간입니다.` };
+      const rep = { ...s, name: key, category: '쇼핑', stay: 90, desc: `${key}에 다양한 브랜드 매장이 입점한 복합 쇼핑 공간입니다.` };
       groups.set(key, rep); collapsed.push(rep);
     } else { const rep = groups.get(key); if (!rep._img && s._img) rep._img = s._img; }
   }
@@ -171,9 +161,8 @@ function buildDistrict(cityDir, district, cityName) {
 }
 
 function main() {
-  if (!fs.existsSync(LAB)) { console.error('lab_data 폴더를 찾을 수 없습니다:', LAB); process.exit(1); }
+  if (!fs.existsSync(LAB)) { process.exit(1); }
 
-  // 기존 단일(은평구) 산출물 정리
   fs.rmSync(path.join(ROOT, 'public', 'spots.json'), { force: true });
   fs.rmSync(path.join(ROOT, 'public', 'images'), { recursive: true, force: true });
   fs.rmSync(path.join(ROOT, 'public', 'data'), { recursive: true, force: true });
@@ -193,24 +182,21 @@ function main() {
     for (const district of districts) {
       const { spots, imgDir } = buildDistrict(city.dir, district, city.name);
 
-      // 이미지 복사 + 경로 확정
       const outImgDir = path.join(ROOT, 'public', 'images', city.code, district);
       fs.mkdirSync(outImgDir, { recursive: true });
-      let copied = 0;
       for (const s of spots) {
         if (s._img) {
           try {
             fs.copyFileSync(path.join(imgDir, s._img), path.join(outImgDir, s._img));
             s.image = `/images/${city.code}/${district}/${s._img}`;
-            copied++;
           } catch (e) { s.image = ''; }
         } else s.image = '';
         delete s._img;
+        s.pop = popOf(s);
       }
 
       fs.writeFileSync(path.join(outDataDir, district + '.json'), JSON.stringify(spots));
       cityEntry.districts.push({ name: district, count: spots.length });
-      console.log(`${city.name} ${district}: ${spots.length}곳 (이미지 ${copied})`);
     }
 
     cityEntry.districts.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
@@ -218,8 +204,6 @@ function main() {
   }
 
   fs.writeFileSync(path.join(ROOT, 'public', 'data', 'regions.json'), JSON.stringify(regions, null, 2));
-  const total = regions.cities.reduce((n, c) => n + c.districts.reduce((m, d) => m + d.count, 0), 0);
-  console.log(`\n완료: ${regions.cities[0].districts.length}개 구, 총 ${total}곳`);
 }
 
 main();

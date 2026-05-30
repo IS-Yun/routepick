@@ -1,63 +1,88 @@
-// 동선·시간표 계산. 어떤 관광지를 넣을지는 모델이 점수로 정하고,
-// 여기서는 선택된 관광지의 방문 순서(최근접)와 일자별 시간표를 만든다.
-
 function distanceKm(a, b) {
   const R = 6371;
   const dLat = (b.lat - a.lat) * Math.PI / 180;
   const dLng = (b.lng - a.lng) * Math.PI / 180;
-  const la1 = a.lat * Math.PI / 180;
-  const la2 = b.lat * Math.PI / 180;
+  const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.asin(Math.sqrt(h));
 }
 
 function travelMinutes(a, b) {
-  // 서울 도심 이동 추정 — 평균 시속 18km(대중교통/도보 혼합), 최소 15분
-  return Math.max(15, Math.round(distanceKm(a, b) / 18 * 60));
+  const roadKm = distanceKm(a, b) * 1.35;
+  return Math.max(12, Math.round(roadKm / 18 * 60) + 7);
 }
 
 function toTime(min) {
-  const h = Math.floor(min / 60) % 24;
-  const m = min % 60;
+  const h = Math.floor(min / 60) % 24, m = min % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 function orderByNearest(list) {
   if (list.length <= 2) return list.slice();
-  const remaining = list.slice();
-  const ordered = [remaining.shift()];
-  while (remaining.length) {
-    const last = ordered[ordered.length - 1];
-    let bestIdx = 0, bestDist = Infinity;
-    remaining.forEach((s, i) => {
-      const d = distanceKm(last, s);
-      if (d < bestDist) { bestDist = d; bestIdx = i; }
-    });
-    ordered.push(remaining.splice(bestIdx, 1)[0]);
+  const rem = list.slice(), ord = [rem.shift()];
+  while (rem.length) {
+    const last = ord[ord.length - 1];
+    let bi = 0, bd = Infinity;
+    rem.forEach((s, i) => { const d = distanceKm(last, s); if (d < bd) { bd = d; bi = i; } });
+    ord.push(rem.splice(bi, 1)[0]);
   }
-  return ordered;
+  return ord;
 }
 
 const PACE = { '느긋하게': 3, '보통': 4, '알차게': 5 };
 
-// 모델이 점수순으로 선별한 spots(상위 N개)를 일자별 코스로 편성
-function schedule(selected, days, perDay) {
-  // 하루 안에서는 동선이 자연스럽도록 최근접으로 재정렬
-  const days_ = [];
-  for (let d = 0; d < days; d++) {
-    const chunk = orderByNearest(selected.slice(d * perDay, (d + 1) * perDay));
-    if (!chunk.length) break;
-
-    let clock = 9 * 60;
-    const stops = chunk.map((spot, i) => {
-      if (i > 0) clock += travelMinutes(chunk[i - 1], spot);
-      const arrive = clock;
-      clock += spot.stay || 60;
-      return { ...spot, order: i + 1, arrive: toTime(arrive), leave: toTime(clock) };
-    });
-    days_.push({ day: d + 1, stops });
-  }
-  return { days: days_, total: days_.reduce((n, d) => n + d.stops.length, 0) };
+function mealLabel(min) {
+  if (min < 10 * 60 + 30) return '아침';
+  if (min < 15 * 60) return '점심';
+  if (min < 17 * 60) return '식사';
+  if (min < 21 * 60) return '저녁';
+  return '식사';
 }
 
-window.RouteEngine = { schedule, distanceKm, PACE };
+const MEAL_TIMES = [12 * 60 + 30, 18 * 60];
+const MIN_MEAL_GAP = 180;
+
+function nearestIdx(list, ref) {
+  let bi = 0, bd = Infinity;
+  list.forEach((s, i) => { const d = distanceKm(ref, s); if (d < bd) { bd = d; bi = i; } });
+  return bi;
+}
+
+function scheduleDay(daySpots, dayNum, district) {
+  const sights = orderByNearest(daySpots.filter(s => s.category !== '맛집'));
+  let foods = daySpots.filter(s => s.category === '맛집');
+
+  const stops = [];
+  let clock = 9 * 60;
+  let lastMealStart = -999;
+
+  const add = (spot, isMeal) => {
+    if (stops.length) clock += travelMinutes(stops[stops.length - 1], spot);
+    if (isMeal && clock < lastMealStart + MIN_MEAL_GAP) clock = lastMealStart + MIN_MEAL_GAP;
+    const arrive = clock;
+    clock += spot.stay || 60;
+    if (isMeal) lastMealStart = arrive;
+    stops.push({ ...spot, arrive: toTime(arrive), leave: toTime(clock), meal: isMeal ? mealLabel(arrive) : null });
+  };
+  const last = () => stops[stops.length - 1] || sights[0] || foods[0];
+
+  if (!sights.length) {
+    if (foods.length) clock = Math.max(clock, 12 * 60);
+    foods.forEach(f => add(f, true));
+  } else {
+    foods = foods.slice(0, 2);
+    let mi = 0;
+    for (const sight of sights) {
+      while (mi < foods.length && mi < MEAL_TIMES.length && clock >= MEAL_TIMES[mi] && clock >= 11 * 60) {
+        add(foods.splice(nearestIdx(foods, last()), 1)[0], true); mi++;
+      }
+      add(sight, false);
+    }
+    while (foods.length) add(foods.splice(nearestIdx(foods, last()), 1)[0], true);
+  }
+
+  stops.forEach((s, i) => s.order = i + 1);
+  return { day: dayNum, district, stops };
+}
+
+window.RouteEngine = { scheduleDay, distanceKm, orderByNearest, PACE };

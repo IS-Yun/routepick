@@ -1,12 +1,12 @@
-const CATEGORIES = ['자연/생태', '문화/역사', '도시/체험', '맛집/쇼핑'];
+const CATEGORIES = ['자연/생태', '문화/역사', '도시/체험', '맛집', '쇼핑'];
 
 let SPOTS = [];
 let map, layerGroup;
+const DISTRICT_CACHE = {};
 
 const $ = sel => document.querySelector(sel);
 
-// 이미지가 없을 때 쓰는 클라이언트 생성 폴백(서버 불필요 → 정적 배포 가능)
-const CAT_COLORS = { '자연/생태': '#2bae8e', '문화/역사': '#c98a3a', '도시/체험': '#2a7de1', '맛집/쇼핑': '#e8743b' };
+const CAT_COLORS = { '자연/생태': '#2bae8e', '문화/역사': '#c98a3a', '도시/체험': '#2a7de1', '맛집': '#e8553b', '쇼핑': '#9b6dd6' };
 function placeholderImg(s) {
   const c = CAT_COLORS[s.category] || '#8893a3';
   const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -15,6 +15,13 @@ function placeholderImg(s) {
 }
 const imgOf = s => (s.image && (s.image.startsWith('http') || s.image.startsWith('/'))) ? s.image : placeholderImg(s);
 
+const ratingOf = s => Math.round((s.pop != null ? s.pop : 0.5) * 5 * 10) / 10;
+function starsHtml(s) {
+  const r = ratingOf(s);
+  const pct = (r / 5 * 100).toFixed(0);
+  return `<span class="rating"><span class="stars" style="--p:${pct}%" aria-label="인기도 ${r.toFixed(1)}점"></span><b>${r.toFixed(1)}</b></span>`;
+}
+
 init();
 
 let REGIONS, currentCity, currentDistrict;
@@ -22,8 +29,7 @@ let REGIONS, currentCity, currentDistrict;
 async function init() {
   try {
     REGIONS = await fetch('/data/regions.json').then(r => r.json());
-    const m = await RouteModel.loadModel();
-    console.log(`[AI] 모델 로드 완료 — 구조 ${m.layers.map(L => L.inN + '→' + L.outN).join(', ')}, 학습 ${m.samples}샘플, 검증손실 ${m.finalValLoss}`);
+    await RouteModel.loadModel();
   } catch (e) {
     REGIONS = { cities: [] };
   }
@@ -40,7 +46,6 @@ async function init() {
   }
 }
 
-/* ---------- 지역 계층 (시/도 → 구) ---------- */
 function fillSelect(sel, items, val) {
   if (!sel) return;
   sel.innerHTML = items.map(i => `<option value="${i}">${i}</option>`).join('');
@@ -51,7 +56,16 @@ function setupRegions() {
   fillSelect($('#opCity'), REGIONS.cities.map(c => c.name), REGIONS.cities[0] && REGIONS.cities[0].name);
   $('#opCity').addEventListener('change', () => changeCity($('#opCity').value));
   $('#opDistrict').addEventListener('change', () => changeDistrict($('#opDistrict').value));
-  $('#opRegion').addEventListener('change', () => changeDistrict($('#opRegion').value));
+}
+
+const SPOT_INDEX = {};
+async function getDistrictSpots(name) {
+  if (!DISTRICT_CACHE[name]) {
+    const arr = await fetch(`/data/${currentCity.code}/${encodeURIComponent(name)}.json`).then(r => r.json());
+    arr.forEach(s => { s.uid = name + '/' + s.id; SPOT_INDEX[s.uid] = s; });
+    DISTRICT_CACHE[name] = arr;
+  }
+  return DISTRICT_CACHE[name];
 }
 
 async function changeCity(cityName) {
@@ -60,28 +74,41 @@ async function changeCity(cityName) {
   if ($('#cityLabel')) $('#cityLabel').textContent = currentCity.name;
   const names = currentCity.districts.map(d => d.name);
   fillSelect($('#opDistrict'), names);
-  fillSelect($('#opRegion'), names);
+  buildDistrictChips(names);
   await changeDistrict(names[0]);
+}
+
+function buildDistrictChips(names) {
+  const box = $('#opDistricts');
+  if (!box) return;
+  box.innerHTML = names.map(d => `<span class="chip dchip" data-d="${d}">${d}</span>`).join('');
+  box.querySelectorAll('.dchip').forEach(ch => ch.addEventListener('click', () => ch.classList.toggle('on')));
+}
+
+function setBuilderDistrict(name) {
+  const box = $('#opDistricts');
+  if (!box) return;
+  box.querySelectorAll('.dchip').forEach(ch => ch.classList.toggle('on', ch.dataset.d === name));
+  const btn = $('#selAllDistricts');
+  if (btn) syncSelAll('#opDistricts', '.dchip', btn);
 }
 
 async function changeDistrict(name) {
   currentDistrict = name;
   if ($('#opDistrict')) $('#opDistrict').value = name;
-  if ($('#opRegion')) $('#opRegion').value = name;
   try {
-    SPOTS = await fetch(`/data/${currentCity.code}/${encodeURIComponent(name)}.json`).then(r => r.json());
+    SPOTS = await getDistrictSpots(name);
   } catch (e) { SPOTS = []; }
   spotExpanded = false;
   drawSpots();
+  setBuilderDistrict(name);
   const sub = $('#exploreSub');
   if (sub) sub.textContent = `${currentCity.name} ${name}의 관광정보(${SPOTS.length}곳)를 테마별로 선별했습니다.`;
-  // 지역이 바뀌면 이전 루트 결과는 숨김
   $('#builderResult').classList.add('hidden');
   document.querySelector('.builder').classList.remove('has-result');
   $('#simulation').classList.add('hidden');
 }
 
-/* ---------- 테마별 큐레이션 ---------- */
 function renderCategoryTabs() {
   const tabs = $('#catTabs');
   const all = ['전체', ...CATEGORIES];
@@ -98,7 +125,7 @@ function renderCategoryTabs() {
 
 let curCat = '전체';
 let spotExpanded = false;
-const PAGE = 8;
+const pageSize = () => window.innerWidth <= 600 ? 4 : 8;
 
 function renderSpots(cat) {
   curCat = cat;
@@ -107,17 +134,18 @@ function renderSpots(cat) {
 }
 
 function drawSpots() {
+  const PAGE = pageSize();
   const full = curCat === '전체' ? SPOTS : SPOTS.filter(s => s.category === curCat);
   const list = spotExpanded ? full : full.slice(0, PAGE);
   const grid = $('#spotGrid');
   if (!full.length) { grid.innerHTML = '<p class="share-empty">표시할 관광정보가 없습니다.</p>'; $('#spotMore').style.display = 'none'; return; }
   grid.innerHTML = list.map(s => `
-    <div class="card" data-id="${s.id}">
+    <div class="card" data-id="${s.uid}">
       <img src="${imgOf(s)}" alt="${s.name}" loading="lazy">
       <div class="card-body">
         <span class="card-cat">${s.category}</span>
         <h3>${s.name}</h3>
-        <div class="card-region">${s.region}</div>
+        <div class="card-region">${s.region} ${starsHtml(s)}</div>
         <p>${s.desc || ''}</p>
       </div>
     </div>`).join('');
@@ -134,15 +162,15 @@ function drawSpots() {
   }
 }
 
-/* ---------- 관광지 상세 모달 ---------- */
 function openDetail(id) {
-  const s = SPOTS.find(x => x.id === id);
+  const s = SPOT_INDEX[id] || SPOTS.find(x => x.uid === id || x.id === id);
   if (!s) return;
   $('#dtImg').src = imgOf(s);
   $('#dtImg').alt = s.name;
   $('#dtCat').textContent = s.category;
   $('#dtName').textContent = s.name;
   $('#dtRegion').textContent = `${s.region}${s.addr ? ' · ' + s.addr : ''}`;
+  $('#dtRating').innerHTML = `${starsHtml(s)} <span class="rating-cap">인기·완성도</span>`;
 
   const meta = [];
   if (s.hours) meta.push(['이용시간', s.hours]);
@@ -155,6 +183,7 @@ function openDetail(id) {
   if (s.tel) links.push(`<a class="lk-tel" href="tel:${s.tel}">📞 ${s.tel}</a>`);
   const web = s.home || `https://korean.visitkorea.or.kr/search/search_list.do?keyword=${encodeURIComponent(s.name)}`;
   links.push(`<a class="lk-web" href="${web}" target="_blank" rel="noopener">관광정보 보기 ↗</a>`);
+  if (s.lat && s.lng) links.push(`<a class="lk-nav" href="${naverMapUrl(s)}" target="_blank" rel="noopener">🗺 네이버지도 ↗</a>`);
   $('#dtLinks').innerHTML = links.join('');
 
   $('#detailModal').classList.remove('hidden');
@@ -166,7 +195,6 @@ function bindDetailModal() {
   modal.addEventListener('click', e => { if (e.target === modal) modal.classList.add('hidden'); });
 }
 
-/* ---------- 빌더 옵션 ---------- */
 function renderBuilderOptions() {
   $('#opCats').innerHTML = CATEGORIES.map(c =>
     `<span class="chip" data-cat="${c}">${c}</span>`).join('');
@@ -175,77 +203,164 @@ function renderBuilderOptions() {
   });
 }
 
-/* ---------- 모델 점수 기반 선택 ----------
-   - 선택한 테마를 우선 채우고 부족분만 다른 테마로 보충
-   - 같은 위치(120m 이내)·같은 브랜드 중복 방지
-   - 가중 무작위 → 매번 다른 코스 */
-const brandOf = s => (s.name || '').split(/\s|\[|\(/)[0];     // 첫 토큰(올리브영, 이마트 …)
+const brandOf = s => (s.name || '').split(/\s|\[|\(/)[0];
 const tooClose = (a, b) => RouteEngine.distanceKm(a, b) < 0.12;
 
-function pickWeighted(cand, need, picked) {
-  const out = [];
-  const pool = cand.slice();
-  const brands = new Set(picked.map(brandOf));
-  while (out.length < need && pool.length) {
+function pickOne(pool, picked) {
+  let guard = pool.length;
+  while (pool.length && guard-- > 0) {
     const w = pool.map(s => Math.pow(s.score, 5) + 1e-6);
     const total = w.reduce((a, b) => a + b, 0);
     let r = Math.random() * total, i = 0;
     while (i < pool.length - 1 && (r -= w[i]) > 0) i++;
     const s = pool.splice(i, 1)[0];
-    if (brands.has(brandOf(s))) continue;                     // 같은 브랜드 제외
-    if ([...picked, ...out].some(c => tooClose(c, s))) continue; // 같은 위치 제외
-    brands.add(brandOf(s));
+    if (picked.some(c => brandOf(c) === brandOf(s))) continue;
+    if (picked.some(c => tooClose(c, s))) continue;
+    return s;
+  }
+  return null;
+}
+
+function pickWeighted(cand, need, picked) {
+  const pool = cand.slice();
+  const out = [];
+  while (out.length < need) {
+    const s = pickOne(pool, [...picked, ...out]);
+    if (!s) break;
     out.push(s);
   }
   return out;
 }
 
-function selectSpots(scored, need, cats) {
+function selectSpots(scored, need, cats, maxFoods) {
   if (!cats.length) return pickWeighted(scored, need, []);
-  const inTheme = scored.filter(s => cats.includes(s.category));
-  const others = scored.filter(s => !cats.includes(s.category));
-  const primary = pickWeighted(inTheme, need, []);
-  if (primary.length >= need) return primary;
-  return primary.concat(pickWeighted(others, need - primary.length, primary));
+  const foodCap = (cats.includes('맛집') && cats.length > 1) ? (maxFoods != null ? maxFoods : Math.min(2, need - 1)) : Infinity;
+  const pools = {};
+  cats.forEach(c => pools[c] = scored.filter(s => s.category === c));
+  const chosen = [];
+  let foodCount = 0;
+  while (chosen.length < need) {
+    let progressed = false;
+    const order = [...cats].sort(() => Math.random() - 0.5);
+    for (const c of order) {
+      if (chosen.length >= need) break;
+      if (c === '맛집' && foodCount >= foodCap) continue;
+      const s = pickOne(pools[c], chosen);
+      if (s) { chosen.push(s); if (c === '맛집') foodCount++; progressed = true; }
+    }
+    if (!progressed) break;
+  }
+  if (chosen.length < need) {
+    const others = scored.filter(s => !cats.includes(s.category));
+    chosen.push(...pickWeighted(others, need - chosen.length, chosen));
+  }
+  return chosen;
 }
 
-/* ---------- 루트 생성 ---------- */
 function readOptions() {
+  let districts = [...$('#opDistricts').querySelectorAll('.dchip.on')].map(c => c.dataset.d);
+  if (!districts.length) districts = currentCity.districts.map(d => d.name);
+  let categories = [...$('#opCats').querySelectorAll('.chip.on')].map(c => c.dataset.cat);
+  if (!categories.length) categories = [...CATEGORIES];
   return {
-    region: $('#opRegion').value,
-    categories: [...$('#opCats').querySelectorAll('.chip.on')].map(c => c.dataset.cat),
+    districts,
+    categories,
     style: $('#opStyle').value,
     days: parseInt($('#opDays').value, 10)
   };
 }
 
-function generate() {
+function centroidOf(pts) {
+  const n = pts.length || 1;
+  return [pts.reduce((a, p) => a + p.lat, 0) / n, pts.reduce((a, p) => a + p.lng, 0) / n];
+}
+function sq(p, c) { const dy = p.lat - c[0], dx = p.lng - c[1]; return dy * dy + dx * dx; }
+
+function clusterDays(pts, k) {
+  k = Math.min(k, pts.length);
+  if (k <= 1) return [pts.slice()];
+  const sorted = [...pts].sort((a, b) => a.lng - b.lng);
+  let cents = [];
+  for (let i = 0; i < k; i++) { const p = sorted[Math.floor(i * (pts.length - 1) / (k - 1))]; cents.push([p.lat, p.lng]); }
+  const assign = new Array(pts.length).fill(0);
+  for (let it = 0; it < 15; it++) {
+    let changed = false;
+    pts.forEach((p, i) => {
+      let bi = 0, bd = Infinity;
+      cents.forEach((c, ci) => { const d = sq(p, c); if (d < bd) { bd = d; bi = ci; } });
+      if (assign[i] !== bi) { assign[i] = bi; changed = true; }
+    });
+    for (let ci = 0; ci < k; ci++) { const g = pts.filter((_, i) => assign[i] === ci); if (g.length) cents[ci] = centroidOf(g); }
+    if (!changed) break;
+  }
+  const clusters = Array.from({ length: k }, () => []);
+  pts.forEach((p, i) => clusters[assign[i]].push(p));
+  for (let ci = 0; ci < k; ci++) {
+    if (!clusters[ci].length) {
+      const big = clusters.reduce((a, b) => b.length > a.length ? b : a);
+      if (big.length > 1) clusters[ci].push(big.pop());
+    }
+  }
+  return clusters.filter(c => c.length);
+}
+
+async function generate() {
   const o = readOptions();
   const perDay = RouteEngine.PACE[o.style] || 4;
-  const pool = SPOTS.filter(s => s.region === o.region);
 
   showResult();
-  $('#loading').classList.remove('hidden');     // AI 분석 표시
+  $('#loading').classList.remove('hidden');
   $('#simulation').classList.add('hidden');
+  $('#map').style.display = '';
+  $('#routeMsg').classList.add('hidden');
 
-  // 실제 추론 + 자연스러운 분석 연출(추론 자체는 수 ms로 매우 빠름)
+  await Promise.all(o.districts.map(getDistrictSpots));
+
   setTimeout(() => {
-    if (!pool.length) {
-      $('#loading').classList.add('hidden');
-      $('#map').style.display = 'none';
-      $('#routeMsg').classList.remove('hidden');
-      return;
-    }
-    $('#map').style.display = '';
-    $('#routeMsg').classList.add('hidden');
-
-    const t0 = performance.now();
+    const pool = o.districts.flatMap(d => DISTRICT_CACHE[d] || []);
     const scored = RouteModel.scoreSpots(pool, { categories: o.categories, style: o.style });
-    const t1 = performance.now();
-    console.log(`[AI] 신경망 추론 실행 — ${pool.length}곳 적합도 계산 ${(t1 - t0).toFixed(2)}ms (예: 최고 ${(scored[0].score * 100).toFixed(1)}% ${scored[0].name})`);
 
-    const selected = selectSpots(scored, Math.min(perDay * o.days, scored.length), o.categories);
-    const result = RouteEngine.schedule(selected, o.days, perDay);
+    const nD = o.districts.length;
+    const foodOnly = o.categories.length === 1 && o.categories[0] === '맛집';
+    const sightThemes = o.categories.filter(c => c !== '맛집');
+    const wantFood = o.categories.includes('맛집');
+    const foodsPerDay = foodOnly ? Math.min(perDay, 3) : (wantFood ? (perDay >= 5 ? 2 : 1) : 0);
+    const sightsPerDay = foodOnly ? 0 : perDay - foodsPerDay;
+
+    const pickPer = (themes, perDayCount) => {
+      if (!themes.length || perDayCount <= 0) return [];
+      const out = [];
+      o.districts.forEach(d => {
+        const ds = scored.filter(s => s.region === d && themes.includes(s.category));
+        out.push(...selectSpots(ds, Math.ceil(perDayCount * o.days / nD), themes, Infinity));
+      });
+      return out.slice(0, perDayCount * o.days);
+    };
+    const sights = pickPer(sightThemes, sightsPerDay);
+    const foods = pickPer(['맛집'], foodsPerDay);
+
+    const result = { days: [], total: 0 };
+    if (foodOnly) {
+      clusterDays(foods, o.days).forEach((cl, i) => {
+        const obj = RouteEngine.scheduleDay(cl, i + 1, [...new Set(cl.map(s => s.region))].join('·'));
+        result.days.push(obj); result.total += obj.stops.length;
+      });
+    } else {
+      const clusters = clusterDays(sights, o.days);
+      const cents = clusters.map(centroidOf);
+      const dayFoods = clusters.map(() => []);
+      foods.forEach(f => {
+        const order = cents.map((c, i) => [i, sq(f, c)]).sort((a, b) => a[1] - b[1]);
+        const t = order.find(([i]) => dayFoods[i].length < foodsPerDay);
+        if (t) dayFoods[t[0]].push(f);
+      });
+      clusters.forEach((cl, i) => {
+        const daySpots = [...cl, ...dayFoods[i]];
+        const where = [...new Set(daySpots.map(s => s.region))].join('·');
+        const obj = RouteEngine.scheduleDay(daySpots, i + 1, where);
+        result.days.push(obj); result.total += obj.stops.length;
+      });
+    }
 
     $('#loading').classList.add('hidden');
     renderSimulation(result, o);
@@ -257,12 +372,32 @@ function showResult() {
   document.querySelector('.builder').classList.add('has-result');
 }
 
+function toggleSelectAll(boxSel, chipSel, btn) {
+  const chips = [...$(boxSel).querySelectorAll(chipSel)];
+  if (!chips.length) return;
+  const allOn = chips.every(c => c.classList.contains('on'));
+  chips.forEach(c => c.classList.toggle('on', !allOn));
+  syncSelAll(boxSel, chipSel, btn);
+}
+
+function syncSelAll(boxSel, chipSel, btn) {
+  const chips = [...$(boxSel).querySelectorAll(chipSel)];
+  const allOn = chips.length && chips.every(c => c.classList.contains('on'));
+  btn.textContent = allOn ? '전체해제' : '전체선택';
+  btn.classList.toggle('on', allOn);
+}
+
 function bindBuilder() {
   $('#builderForm').addEventListener('submit', e => { e.preventDefault(); generate(); });
   $('#regenBtn').addEventListener('click', generate);
+
+  const selDist = $('#selAllDistricts'), selCat = $('#selAllCats');
+  selDist.addEventListener('click', () => toggleSelectAll('#opDistricts', '.dchip', selDist));
+  selCat.addEventListener('click', () => toggleSelectAll('#opCats', '.chip', selCat));
+  $('#opDistricts').addEventListener('click', () => syncSelAll('#opDistricts', '.dchip', selDist));
+  $('#opCats').addEventListener('click', () => syncSelAll('#opCats', '.chip', selCat));
 }
 
-/* ---------- 지도 ---------- */
 function ensureMap() {
   if (map) return;
   map = L.map('map', { scrollWheelZoom: false }).setView([37.5665, 126.978], 11);
@@ -270,6 +405,11 @@ function ensureMap() {
     attribution: '© OpenStreetMap', maxZoom: 18
   }).addTo(map);
   layerGroup = L.layerGroup().addTo(map);
+}
+
+function naverMapUrl(s) {
+  const q = encodeURIComponent(`${s.region ? s.region + ' ' : ''}${s.name}`);
+  return `https://map.naver.com/p/search/${q}?c=15.00,0,0,0,dh&lat=${s.lat}&lng=${s.lng}`;
 }
 
 const DAY_COLORS = ['#2a7de1', '#e8743b', '#2bae8e'];
@@ -282,7 +422,6 @@ function numIcon(n, color) {
   });
 }
 
-// 선택한 일차만 지도에 표시
 function drawDay(day, di) {
   ensureMap();
   layerGroup.clearLayers();
@@ -291,7 +430,8 @@ function drawDay(day, di) {
   day.stops.forEach(s => {
     bounds.push([s.lat, s.lng]);
     L.marker([s.lat, s.lng], { icon: numIcon(s.order, color) }).addTo(layerGroup)
-      .bindPopup(`<b>${s.order}. ${s.name}</b><br>${s.arrive} 도착 · 적합도 ${(s.score * 100).toFixed(0)}%`);
+      .bindTooltip(`${s.order}. ${s.name}`, { direction: 'top', offset: [0, -10], opacity: 0.95 })
+      .bindPopup(`<b>${s.order}. ${s.name}</b>${s.meal ? ' 🍽 ' + s.meal : ''}<br>${s.arrive} 도착 · ${s.category}<br><a class="naver-link" href="${naverMapUrl(s)}" target="_blank" rel="noopener">네이버지도에서 보기 ↗</a>`);
   });
   const pts = day.stops.map(s => [s.lat, s.lng]);
   if (pts.length > 1) L.polyline(pts, { color, weight: 3, opacity: .85 }).addTo(layerGroup);
@@ -301,23 +441,24 @@ function drawDay(day, di) {
   }
 }
 
-/* ---------- 시뮬레이션 ---------- */
 function renderSimulation(result, opts) {
   const sim = $('#simulation');
   sim.classList.remove('hidden');
   const cityShort = currentCity ? currentCity.name.replace(/특별시|광역시|특별자치시|특별자치도|도$/, '') : '';
-  $('#simTitle').textContent = `${cityShort} ${opts.region} ${dayLabel(opts.days)} 추천 코스 (총 ${result.total}곳)`;
+  const uniqD = [...new Set(result.days.flatMap(d => d.stops.map(s => s.region)))];
+  const where = uniqD.join('·');
+  $('#simTitle').textContent = `${cityShort} ${where} ${dayLabel(opts.days)} 추천 코스 (총 ${result.total}곳)`;
 
   const tabs = $('#dayTabs');
   tabs.innerHTML = result.days.map((d, i) =>
-    `<div class="day-tab ${i === 0 ? 'on' : ''}" data-day="${i}">${d.day}일차</div>`).join('');
+    `<div class="day-tab ${i === 0 ? 'on' : ''}" data-day="${i}">${d.day}일차 · ${d.district}</div>`).join('');
   tabs.querySelectorAll('.day-tab').forEach(t => {
     t.addEventListener('click', () => {
       tabs.querySelectorAll('.day-tab').forEach(x => x.classList.remove('on'));
       t.classList.add('on');
       const di = parseInt(t.dataset.day, 10);
       renderDay(result.days[di]);
-      drawDay(result.days[di], di);          // 해당 일차만 지도에 표시
+      drawDay(result.days[di], di);
     });
   });
   renderDay(result.days[0]);
@@ -329,12 +470,12 @@ function renderDay(day) {
     <div class="tl-item">
       <div class="tl-time">${s.arrive}</div>
       <div class="tl-dot"></div>
-      <div class="tl-card" data-id="${s.id}">
+      <div class="tl-card" data-id="${s.uid}">
         <img src="${imgOf(s)}" alt="${s.name}" loading="lazy">
         <div class="tl-info">
-          <span class="order">${s.order}번째 코스 · ${s.arrive}~${s.leave} · <b style="color:#2a7de1">AI 적합도 ${(s.score * 100).toFixed(0)}%</b></span>
+          <span class="order">${s.meal ? `<b class="meal-tag">🍽 ${s.meal}</b> · ` : ''}${s.order}번째 코스 · ${s.arrive}~${s.leave}</span>
           <h4>${s.name}</h4>
-          <div class="meta"><span>📍 ${s.category}</span><span>🕒 ${s.hours || '-'}</span><span>💳 ${s.fee || '-'}</span></div>
+          <div class="meta"><span>📍 ${s.category}</span><span>${starsHtml(s)}</span><span>🕒 ${s.hours || '-'}</span></div>
           <p>${s.desc || ''}</p>
         </div>
       </div>
